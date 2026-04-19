@@ -1,0 +1,1338 @@
+-- blueprint.lua on discord - Pet Wear + Egg Hatching
+
+local Players = game:GetService('Players')
+local ReplicatedStorage = game:GetService('ReplicatedStorage')
+local TweenService = game:GetService('TweenService')
+local HttpService = game:GetService('HttpService')
+
+pcall(function()
+    setthreadidentity(2)
+end)
+
+local LocalPlayer = Players.LocalPlayer
+local playerGui = LocalPlayer:WaitForChild("PlayerGui")
+
+local Fsys = require(ReplicatedStorage:WaitForChild("Fsys"))
+local LoadModule = Fsys.load
+
+local ClientData = LoadModule("ClientData")
+local RouterClient = LoadModule("RouterClient")
+local UIManager = LoadModule("UIManager")
+local InventoryDB = LoadModule("InventoryDB")
+local KindDB = LoadModule("KindDB")
+local DownloadClient = LoadModule("DownloadClient")
+local AilmentsClient = LoadModule("new:AilmentsClient")
+local AilmentsDB = LoadModule("new:AilmentsDB")
+local NeonVFXHelper = LoadModule("NeonVFXHelper")
+
+_G.InventoryDB = InventoryDB
+
+-- Suppress warnings
+local originalWarn = warn
+warn = function(message)
+    if not message:find("ailments_completed") then
+        originalWarn(message)
+    end
+end
+
+-- ================================================================
+-- PET WEAR FUNCTIONS
+-- ================================================================
+
+local PetAccessoryEquipHelper = nil
+local PetAccessoryUnequipHelper = nil
+
+pcall(function()
+    PetAccessoryEquipHelper = LoadModule("PetAccessoryEquipHelper")
+    PetAccessoryUnequipHelper = LoadModule("PetAccessoryUnequipHelper")
+end)
+
+-- Preppy Pet Wears list
+local PreppyWears = {
+    "Unicorn Horn",
+    "Pink Cat Ear Headphones",
+    "Rainbow Maker",
+    "2022 Birthday Cupcake Shoes",
+    "Heart Glasses",
+    "Flower Crown",
+    "Pink Bow",
+    "Candy Cane",
+    "Fairy Wings",
+    "Butterfly Wings",
+    "Angel Wings",
+    "Devil Wings",
+    "Dragon Wings",
+    "Star Pin",
+    "Moon Pin",
+    "Cloud Pin",
+    "Rainbow Pin",
+    "Heart Pin",
+    "Flower Pin",
+    "Butterfly Pin"
+}
+
+local stopEquipping = false
+
+local function GetPetWearByName(name)
+    for id, v in pairs(InventoryDB.pet_accessories or {}) do
+        if v.name and v.name:lower() == name:lower() then
+            return id
+        end
+    end
+    return false
+end
+
+local function GetAllPetWears()
+    local wears = {}
+    for id, v in pairs(InventoryDB.pet_accessories or {}) do
+        if v.name and v.name ~= "" then
+            table.insert(wears, {id = id, name = v.name})
+        end
+    end
+    return wears
+end
+
+local function GetPreppyWears()
+    local wears = {}
+    for _, wearName in ipairs(PreppyWears) do
+        local id = GetPetWearByName(wearName)
+        if id then
+            table.insert(wears, {id = id, name = wearName})
+        end
+    end
+    return wears
+end
+
+local function EquipWearOnPet(wearId)
+    if not PetAccessoryEquipHelper then
+        warn("[PetWear] PetAccessoryEquipHelper not loaded")
+        return false
+    end
+    
+    local wearEntry = InventoryDB.pet_accessories and InventoryDB.pet_accessories[wearId]
+    if not wearEntry then
+        warn("[PetWear] No entry in InventoryDB.pet_accessories for: " .. tostring(wearId))
+        return false
+    end
+    
+    local wrappers = ClientData.get("pet_char_wrappers")
+    if not wrappers or #wrappers == 0 then
+        warn("[PetWear] No pet equipped")
+        return false
+    end
+    
+    local petModel = wrappers[#wrappers].char
+    if not petModel or not petModel:IsDescendantOf(workspace) then
+        warn("[PetWear] Could not find pet model in workspace")
+        return false
+    end
+    
+    task.spawn(function()
+        local ok, accessoryAsset = pcall(function()
+            return DownloadClient.promise_download_copy("PetAvatarResources", wearEntry.model_handle):expect()
+        end)
+        if not ok or not accessoryAsset then
+            warn("[PetWear] Failed to download asset for: " .. tostring(wearEntry.model_handle))
+            return
+        end
+        
+        local success, result = pcall(function()
+            return PetAccessoryEquipHelper.equip_accessory({
+                pet_model = petModel,
+                accessory_base_asset = accessoryAsset,
+                accessory_item_entry = wearEntry,
+                play_poof_effect = true,
+                is_mannequin = false,
+            })
+        end)
+        
+        if success and result then
+            print("[PetWear] Equipped: " .. (wearEntry.name or wearId))
+        else
+            warn("[PetWear] equip_accessory failed: " .. tostring(result))
+        end
+    end)
+    return true
+end
+
+local function RemoveWearFromPet(wearId)
+    if not PetAccessoryUnequipHelper then
+        warn("[PetWear] PetAccessoryUnequipHelper not loaded")
+        return false
+    end
+    
+    local wearEntry = InventoryDB.pet_accessories and InventoryDB.pet_accessories[wearId]
+    if not wearEntry then
+        warn("[PetWear] No entry in InventoryDB.pet_accessories for: " .. tostring(wearId))
+        return false
+    end
+    
+    local wrappers = ClientData.get("pet_char_wrappers")
+    if not wrappers or #wrappers == 0 then
+        warn("[PetWear] No pet equipped")
+        return false
+    end
+    
+    local petModel = wrappers[#wrappers].char
+    if not petModel or not petModel:IsDescendantOf(workspace) then
+        warn("[PetWear] Could not find pet model in workspace")
+        return false
+    end
+    
+    task.spawn(function()
+        local success, result = pcall(function()
+            return PetAccessoryUnequipHelper.unequip_accessory({
+                pet_model = petModel,
+                accessory_item_entry = wearEntry,
+                play_poof_effect = true,
+            })
+        end)
+        
+        if success and result then
+            print("[PetWear] Removed: " .. (wearEntry.name or wearId))
+        else
+            warn("[PetWear] unequip_accessory failed: " .. tostring(result))
+        end
+    end)
+    return true
+end
+
+local function RemoveAllPetWears()
+    local wears = GetAllPetWears()
+    local removed = 0
+    local failed = 0
+    
+    for i, wear in ipairs(wears) do
+        if stopEquipping then
+            print("[PetWear] Stopped remove at wear " .. i .. "/" .. #wears)
+            break
+        end
+        if RemoveWearFromPet(wear.id) then
+            removed = removed + 1
+        else
+            failed = failed + 1
+        end
+        task.wait(0.03)
+    end
+    
+    return removed, failed
+end
+
+local function EquipAllPetWears()
+    local wears = GetAllPetWears()
+    local equipped = 0
+    local failed = 0
+    
+    for i, wear in ipairs(wears) do
+        if stopEquipping then
+            print("[PetWear] Stopped equip at wear " .. i .. "/" .. #wears)
+            break
+        end
+        if EquipWearOnPet(wear.id) then
+            equipped = equipped + 1
+        else
+            failed = failed + 1
+        end
+        task.wait(0.05)
+    end
+    
+    return equipped, failed
+end
+
+local function EquipPreppyWears()
+    local wears = GetPreppyWears()
+    local equipped = 0
+    local failed = 0
+    
+    for i, wear in ipairs(wears) do
+        if stopEquipping then
+            print("[PetWear] Stopped preppy wears at " .. i .. "/" .. #wears)
+            break
+        end
+        if EquipWearOnPet(wear.id) then
+            equipped = equipped + 1
+        else
+            failed = failed + 1
+        end
+        task.wait(0.05)
+    end
+    
+    return equipped, failed
+end
+
+-- ================================================================
+-- EGG HATCHING FUNCTIONS
+-- ================================================================
+
+local EGG_LIST = {
+    "Starter Egg", "Cracked Egg", "Pet Egg", "Royal Egg", "Retired Egg",
+    "Golden Egg", "Diamond Egg", "Aztec Egg", "Basic Egg", "Crystal Egg",
+    "Christmas Future Egg", "Safari Egg", "Jungle Egg", "Farm Egg", "Aussie Egg",
+    "Fossil Egg", "Ocean Egg", "Mythic Egg", "Woodland Egg", "Japan Egg",
+    "Southeast Asia Egg", "Danger Egg", "Urban Egg", "Desert Egg", "Garden Egg",
+    "Moon Egg", "Blue Egg", "Pink Egg", "Christmas Egg (2019)", "Easter 2020 Egg",
+    "Fool Egg", "Zodiac Minion Egg", "Wrapped Doll"
+}
+
+local EGG_PETS = {
+    ["farm egg"] = { legendary={"Owl","Crow"}, other={"Llama","Flamingo","Cow","Swan","Duck","Pig","Boar","Chicken"} },
+    ["safari egg"] = { legendary={"Giraffe","Lion"}, other={"Cheetah","Elephant","Hyena","Gorilla","Puma","Rhino"} },
+    ["jungle egg"] = { legendary={"Parrot"}, other={"Toucan","Monkey","Boar","Jaguar","Turkey"} },
+    ["aussie egg"] = { legendary={"Platypus","Kookaburra"}, other={"Crocodile","Dingo","Emu","Kangaroo","Koala"} },
+    ["fossil egg"] = { legendary={"Dodo","T-Rex","Mammoth"}, other={"Sloth","Glyptodon","Dilophosaurus","Stegosaurus","Triceratops"} },
+    ["ocean egg"] = { legendary={"Shark","Octopus"}, other={"Seahorse","Dolphin","Pufferfish","Narwhal","Squid","Clam"} },
+    ["woodland egg"] = { legendary={"Hedgehog"}, other={"Deer","Bunny","Rat","Robin","Fox","Squirrel"} },
+    ["mythic egg"] = { legendary={"Kirin","Merhorse","Wolpertinger"}, other={"Wyvern","Hydra","Salamander","Sasquatch","Cerberus"} },
+    ["christmas egg (2019)"] = { legendary={"Reindeer","Gingerbread Reindeer"}, other={"Santa Dog","Holiday Chick","Elf Shrew"} },
+    ["royal egg"] = { legendary={"Unicorn","Dragon"}, other={"Horse","Griffin"} },
+}
+
+local SpawnedPets = {}
+local PetAilmentsCache = {}
+
+local function GenerateUniqueID()
+    return HttpService:GenerateGUID(false)
+end
+
+local function GenerateUniquePetName()
+    local prefixes = {"★", "☆", "♡", "☁️", "✨", "🍓", "🌸", "🍯", "☕", "🌙", "🌈", "❄️", "🫧", "🍬", "🍪", "🥛"}
+    local names = {"Shadow", "Blaze", "Frost", "Thunder", "Moon", "Star", "Sky", "Ocean", "River", "Storm", 
+                   "Ember", "Ash", "Dusk", "Dawn", "Night", "Day", "Sun", "Wind", "Rain", "Snow", "Ice", "Fire",
+                   "Nova", "Cosmo", "Galaxy", "Orbit", "Comet", "Meteor", "Aurora", "Nebula", "Crystal", "Gem",
+                   "Ruby", "Sapphire", "Emerald", "Diamond", "Gold", "Silver", "Mystic", "Magic", "Enchant"}
+    
+    local usePrefix = math.random(1, 3) == 1
+    local name = names[math.random(1, #names)]
+    
+    if usePrefix then
+        return prefixes[math.random(1, #prefixes)] .. name
+    else
+        return name .. " " .. prefixes[math.random(1, #prefixes)]
+    end
+end
+
+local NewnessGroups = {
+    mega_neon_flyable_rideable = 990000,
+    mega_neon_flyable = 980000,
+    mega_neon_rideable = 970000,
+    mega_neon = 960000,
+    neon_flyable_rideable = 950000,
+    neon_flyable = 940000,
+    neon_rideable = 930000,
+    neon = 920000,
+    flyable_rideable = 910000,
+    flyable = 900000,
+    rideable = 890000,
+    regular = 880000
+}
+
+local function GetPropertyGroup(properties)
+    local isMega = properties.mega_neon or false
+    local isNeon = properties.neon or false
+    local canFly = properties.flyable or false
+    local canRide = properties.rideable or false
+
+    if isMega then
+        if canFly and canRide then return "mega_neon_flyable_rideable"
+        elseif canFly then return "mega_neon_flyable"
+        elseif canRide then return "mega_neon_rideable"
+        else return "mega_neon" end
+    elseif isNeon then
+        if canFly and canRide then return "neon_flyable_rideable"
+        elseif canFly then return "neon_flyable"
+        elseif canRide then return "neon_rideable"
+        else return "neon" end
+    else
+        if canFly and canRide then return "flyable_rideable"
+        elseif canFly then return "flyable"
+        elseif canRide then return "rideable"
+        else return "regular" end
+    end
+end
+
+local function UpdateClientData(dataPath, modifier)
+    local identity = get_thread_identity and get_thread_identity() or 8
+    set_thread_identity(2)
+    local currentData = ClientData.get(dataPath)
+    local clonedData = table.clone(currentData)
+    local result = modifier(clonedData)
+    ClientData.predict(dataPath, result)
+    set_thread_identity(identity)
+    return result
+end
+
+local function FindPetId(petName)
+    for id, info in pairs(InventoryDB.pets) do
+        if info.name:lower() == petName:lower() then
+            return id
+        end
+    end
+    return nil
+end
+
+local function GetEggByName(name)
+    for id, info in pairs(InventoryDB.toys) do
+        if info.name and info.name:lower() == name:lower() then
+            if info.name:lower():find("egg") or info.name:lower():find("wrapped") then
+                return id
+            end
+        end
+    end
+    return nil
+end
+
+local function CreateInventoryItem(itemId, category, properties)
+    local uniqueId = GenerateUniqueID()
+    local itemKindData = KindDB[itemId]
+
+    if not itemKindData then
+        warn("Item not found: " .. itemId)
+        return nil
+    end
+
+    properties = properties or {}
+    local newnessValue = 900000
+
+    if category == "pets" then
+        local groupKey = GetPropertyGroup(properties)
+        NewnessGroups[groupKey] = NewnessGroups[groupKey] - 1
+        newnessValue = NewnessGroups[groupKey]
+
+        if not properties.ailments_completed then
+            properties.ailments_completed = 0
+        end
+
+        if not properties.rp_name or properties.rp_name == "" then
+            properties.rp_name = GenerateUniquePetName()
+        end
+    end
+
+    local itemData = {
+        unique = uniqueId,
+        category = category,
+        id = itemId,
+        kind = itemKindData.kind,
+        newness_order = newnessValue,
+        properties = properties,
+        _source = "4fire"
+    }
+
+    local identity = get_thread_identity and get_thread_identity() or 8
+    set_thread_identity(2)
+    local inventory = ClientData.get("inventory")
+    if inventory and inventory[category] then
+        inventory[category][uniqueId] = itemData
+    end
+    set_thread_identity(identity)
+
+    if category == "pets" then
+        SpawnedPets[uniqueId] = { data = itemData, model = nil }
+    end
+
+    task.defer(function()
+        if UIManager and UIManager.apps and UIManager.apps.BackpackApp then
+            UIManager.apps.BackpackApp:refresh_rendered_items()
+        end
+    end)
+
+    return itemData
+end
+
+local function SpawnEgg(eggName)
+    local eggId = GetEggByName(eggName)
+    if not eggId then
+        warn("[Egg] Not found: " .. eggName)
+        return nil
+    end
+    
+    local newEgg = CreateInventoryItem(eggId, "toys", {})
+    if newEgg then
+        task.wait(0.05)
+        pcall(function()
+            RouterClient.get("ToolAPI/Equip"):InvokeServer(newEgg.unique)
+        end)
+        print("[Egg] Spawned: " .. eggName)
+    end
+    return newEgg
+end
+
+local function HatchEgg(eggName, overridePetName)
+    local function namesToIds(names)
+        local ids = {}
+        for _, name in ipairs(names) do
+            for petId, pe in pairs(InventoryDB.pets or {}) do
+                if pe.name and pe.name:lower() == name:lower() then
+                    table.insert(ids, petId)
+                    break
+                end
+            end
+        end
+        return ids
+    end
+    
+    local chosenId = nil
+    
+    if overridePetName and overridePetName ~= "" then
+        chosenId = FindPetId(overridePetName)
+        if not chosenId then
+            warn("[Hatch] Pet not found: " .. overridePetName)
+            return false
+        end
+    else
+        local eggData = EGG_PETS[eggName:lower()]
+        
+        local legPool = eggData and namesToIds(eggData.legendary) or {}
+        local othPool = eggData and namesToIds(eggData.other) or {}
+        
+        if #legPool == 0 and #othPool == 0 then
+            for petId, pe in pairs(InventoryDB.pets or {}) do
+                if not pe.is_egg then
+                    if (pe.rarity or ""):lower():find("legend") then
+                        table.insert(legPool, petId)
+                    else
+                        table.insert(othPool, petId)
+                    end
+                end
+            end
+        end
+        
+        local weightedPool = {}
+        for _, id in ipairs(legPool) do
+            for _ = 1, 3 do table.insert(weightedPool, id) end
+        end
+        for _, id in ipairs(othPool) do
+            table.insert(weightedPool, id)
+        end
+        
+        if #weightedPool > 0 then
+            chosenId = weightedPool[math.random(#weightedPool)]
+        end
+    end
+    
+    if not chosenId then
+        warn("[Hatch] No pet available to hatch")
+        return false
+    end
+    
+    -- Remove egg from inventory
+    local identity = get_thread_identity and get_thread_identity() or 8
+    set_thread_identity(2)
+    local inventory = ClientData.get("inventory")
+    if inventory and inventory.toys then
+        for uid, toy in pairs(inventory.toys) do
+            local itemData = KindDB[toy.id]
+            if itemData and itemData.name and itemData.name:lower() == eggName:lower() then
+                inventory.toys[uid] = nil
+                break
+            end
+        end
+    end
+    set_thread_identity(identity)
+    
+    -- Unequip egg from character
+    local char = LocalPlayer.Character
+    if char then
+        local tool = char:FindFirstChildOfClass("Tool")
+        if tool then
+            pcall(function()
+                RouterClient.get("ToolAPI/Unequip"):InvokeServer(tool:GetAttribute("unique_id") or tool.Name)
+            end)
+            task.wait(0.1)
+            pcall(function() tool:Destroy() end)
+        end
+    end
+    
+    -- Spawn hatched pet
+    local newPet = CreateInventoryItem(chosenId, "pets", {
+        pet_trick_level = math.random(0, 5),
+        neon = false,
+        mega_neon = false,
+        rideable = false,
+        flyable = false,
+        age = 1,
+        ailments_completed = 0,
+        rp_name = GenerateUniquePetName(),
+    })
+    
+    if newPet then
+        task.wait(0.2)
+        pcall(function()
+            RouterClient.get("ToolAPI/Equip"):InvokeServer(newPet.unique)
+        end)
+    end
+    
+    return true
+end
+
+local function HatchEquippedEgg(overridePetName)
+    local char = LocalPlayer.Character
+    if not char then return false end
+    
+    local tool = char:FindFirstChildOfClass("Tool")
+    if not tool then return false end
+    
+    local eggName = tool.Name
+    return HatchEgg(eggName, overridePetName)
+end
+
+-- ================================================================
+-- GLOBAL FUNCTIONS
+-- ================================================================
+
+_G.get_pet_wears = GetAllPetWears
+_G.equip_wear_on_pet = EquipWearOnPet
+_G.remove_wear_from_pet = RemoveWearFromPet
+_G.equip_all_wears = function()
+    stopEquipping = false
+    return EquipAllPetWears()
+end
+_G.remove_all_wears = function()
+    stopEquipping = false
+    return RemoveAllPetWears()
+end
+_G.equip_preppy_wears = function()
+    stopEquipping = false
+    return EquipPreppyWears()
+end
+_G.stop_equipping = function()
+    stopEquipping = true
+    print("[PetWear] Stop command received")
+    return true
+end
+_G.spawn_egg = SpawnEgg
+_G.hatch_egg = HatchEgg
+_G.hatch_equipped_egg = HatchEquippedEgg
+_G.get_eggs = function() return EGG_LIST end
+
+-- Auto-capitalize helper
+local function autoCapitalize(text)
+    if not text or text == "" then
+        return text
+    end
+
+    local result = ""
+    local capitalizeNext = true
+
+    for i = 1, #text do
+        local char = text:sub(i, i)
+        if char == " " then
+            capitalizeNext = true
+            result = result .. char
+        elseif capitalizeNext then
+            result = result .. char:upper()
+            capitalizeNext = false
+        else
+            result = result .. char:lower()
+        end
+    end
+
+    return result
+end
+
+-- ================================================================
+-- GUI
+-- ================================================================
+
+local screenGui = Instance.new("ScreenGui")
+screenGui.Name = "4fire Tools"
+screenGui.ResetOnSpawn = false
+screenGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+screenGui.IgnoreGuiInset = false
+screenGui.Parent = playerGui
+
+local mainFrame = Instance.new("Frame")
+mainFrame.Size = UDim2.new(0, 340, 0, 500)
+mainFrame.Position = UDim2.new(0.5, -170, 0.5, -250)
+mainFrame.BackgroundColor3 = Color3.fromRGB(22, 26, 40)
+mainFrame.BorderSizePixel = 0
+mainFrame.Active = true
+mainFrame.Parent = screenGui
+
+local uiScale = Instance.new("UIScale", mainFrame)
+uiScale.Scale = 0.7
+
+local mainCorner = Instance.new("UICorner")
+mainCorner.CornerRadius = UDim.new(0, 14)
+mainCorner.Parent = mainFrame
+
+local uiStroke = Instance.new("UIStroke")
+uiStroke.Thickness = 3
+uiStroke.Color = Color3.fromRGB(0, 220, 255)
+uiStroke.Parent = mainFrame
+
+local palette = {
+    Color3.fromRGB(0, 220, 255),
+    Color3.fromRGB(120, 90, 255),
+    Color3.fromRGB(255, 80, 160),
+    Color3.fromRGB(0, 200, 180)
+}
+local colorIdx = 1
+task.spawn(function()
+    while true do
+        colorIdx = colorIdx % #palette + 1
+        TweenService:Create(uiStroke, TweenInfo.new(4), { Color = palette[colorIdx] }):Play()
+        task.wait(4)
+    end
+end)
+
+local title = Instance.new("TextLabel")
+title.Size = UDim2.new(1, 0, 0, 20)
+title.Position = UDim2.new(0, 0, 0, 4)
+title.BackgroundTransparency = 1
+title.Text = "4fire - Pet Wear + Eggs"
+title.Font = Enum.Font.GothamBold
+title.TextSize = 12
+title.TextColor3 = Color3.fromRGB(235, 240, 255)
+title.Parent = mainFrame
+
+-- Tab Container
+local tabContainer = Instance.new('Frame')
+tabContainer.Size = UDim2.new(0.96, 0, 0, 24)
+tabContainer.Position = UDim2.new(0.02, 0, 0, 26)
+tabContainer.BackgroundTransparency = 1
+tabContainer.Parent = mainFrame
+
+local tabs = {
+    { key = 'Wear', label = 'Pet Wear' },
+    { key = 'Eggs', label = 'Eggs' }
+}
+
+local activeTab = 'Wear'
+local tabElements = {}
+
+local function SwitchTab(tabName)
+    activeTab = tabName
+    for name, data in pairs(tabElements) do
+        local isActive = name == tabName
+        data.button.BackgroundColor3 = isActive and Color3.fromRGB(50, 50, 60) or Color3.fromRGB(40, 40, 50)
+        data.stroke.Color = isActive and Color3.fromRGB(100, 100, 255) or Color3.fromRGB(80, 80, 80)
+        data.stroke.Thickness = isActive and 1.2 or 0.8
+    end
+end
+
+for i, tab in ipairs(tabs) do
+    local tabButton = Instance.new('TextButton')
+    tabButton.Size = UDim2.new(0.48, 0, 1, 0)
+    tabButton.Position = UDim2.new((i == 1) and 0.01 or 0.51, 0, 0, 0)
+    tabButton.BackgroundColor3 = i == 1 and Color3.fromRGB(50, 50, 60) or Color3.fromRGB(40, 40, 50)
+    tabButton.BackgroundTransparency = 0.2
+    tabButton.Text = tab.label
+    tabButton.Font = Enum.Font.GothamBold
+    tabButton.TextSize = 11
+    tabButton.TextColor3 = Color3.fromRGB(255, 255, 255)
+    tabButton.Parent = tabContainer
+    
+    Instance.new("UICorner", tabButton).CornerRadius = UDim.new(0, 6)
+    
+    local tabStroke = Instance.new('UIStroke')
+    tabStroke.ApplyStrokeMode = Enum.ApplyStrokeMode.Border
+    tabStroke.Color = i == 1 and Color3.fromRGB(100, 100, 255) or Color3.fromRGB(80, 80, 80)
+    tabStroke.Thickness = i == 1 and 1.2 or 0.8
+    tabStroke.Transparency = 0.3
+    tabStroke.Parent = tabButton
+    
+    tabElements[tab.key] = { button = tabButton, stroke = tabStroke }
+    
+    tabButton.MouseButton1Click:Connect(function()
+        SwitchTab(tab.key)
+    end)
+end
+
+-- ================================================================
+-- PET WEAR PANEL
+-- ================================================================
+
+local wearPanel = Instance.new("Frame")
+wearPanel.Size = UDim2.new(0.94, 0, 1, -52)
+wearPanel.Position = UDim2.new(0.03, 0, 0, 52)
+wearPanel.BackgroundTransparency = 1
+wearPanel.Visible = true
+wearPanel.Parent = mainFrame
+
+local wearInfo = Instance.new("TextLabel")
+wearInfo.Size = UDim2.new(1, 0, 0, 30)
+wearInfo.Position = UDim2.new(0, 0, 0, 0)
+wearInfo.BackgroundTransparency = 1
+wearInfo.Text = "Equip or remove accessories on your pet"
+wearInfo.Font = Enum.Font.Gotham
+wearInfo.TextSize = 9
+wearInfo.TextColor3 = Color3.fromRGB(160, 170, 200)
+wearInfo.TextXAlignment = Enum.TextXAlignment.Center
+wearInfo.Parent = wearPanel
+
+-- Wear Name Input
+local wearNameInput = Instance.new("TextBox")
+wearNameInput.Size = UDim2.new(1, 0, 0, 28)
+wearNameInput.Position = UDim2.new(0, 0, 0, 35)
+wearNameInput.BackgroundColor3 = Color3.fromRGB(32, 36, 58)
+wearNameInput.TextColor3 = Color3.fromRGB(240, 240, 255)
+wearNameInput.TextSize = 11
+wearNameInput.Font = Enum.Font.Gotham
+wearNameInput.PlaceholderText = "Enter pet wear name..."
+wearNameInput.PlaceholderColor3 = Color3.fromRGB(140, 150, 180)
+wearNameInput.ClearTextOnFocus = false
+wearNameInput.Text = ""
+wearNameInput.Parent = wearPanel
+Instance.new("UICorner", wearNameInput).CornerRadius = UDim.new(0, 8)
+
+-- Equip Single Wear Button
+local equipWearButton = Instance.new("TextButton")
+equipWearButton.Size = UDim2.new(0.48, 0, 0, 30)
+equipWearButton.Position = UDim2.new(0, 0, 0, 70)
+equipWearButton.Text = "EQUIP WEAR"
+equipWearButton.Font = Enum.Font.GothamBold
+equipWearButton.TextSize = 10
+equipWearButton.BackgroundColor3 = Color3.fromRGB(0, 140, 200)
+equipWearButton.TextColor3 = Color3.fromRGB(255, 255, 255)
+equipWearButton.Parent = wearPanel
+Instance.new("UICorner", equipWearButton).CornerRadius = UDim.new(0, 8)
+
+-- Remove Single Wear Button
+local removeWearButton = Instance.new("TextButton")
+removeWearButton.Size = UDim2.new(0.48, 0, 0, 30)
+removeWearButton.Position = UDim2.new(0.52, 0, 0, 70)
+removeWearButton.Text = "REMOVE WEAR"
+removeWearButton.Font = Enum.Font.GothamBold
+removeWearButton.TextSize = 10
+removeWearButton.BackgroundColor3 = Color3.fromRGB(200, 100, 0)
+removeWearButton.TextColor3 = Color3.fromRGB(255, 255, 255)
+removeWearButton.Parent = wearPanel
+Instance.new("UICorner", removeWearButton).CornerRadius = UDim.new(0, 8)
+
+-- Equip All Wears Button
+local equipAllButton = Instance.new("TextButton")
+equipAllButton.Size = UDim2.new(0.31, 0, 0, 30)
+equipAllButton.Position = UDim2.new(0, 0, 0, 108)
+equipAllButton.Text = "ALL"
+equipAllButton.Font = Enum.Font.GothamBold
+equipAllButton.TextSize = 11
+equipAllButton.BackgroundColor3 = Color3.fromRGB(180, 120, 50)
+equipAllButton.TextColor3 = Color3.fromRGB(255, 255, 255)
+equipAllButton.Parent = wearPanel
+Instance.new("UICorner", equipAllButton).CornerRadius = UDim.new(0, 8)
+
+-- Remove All Wears Button
+local removeAllButton = Instance.new("TextButton")
+removeAllButton.Size = UDim2.new(0.31, 0, 0, 30)
+removeAllButton.Position = UDim2.new(0.345, 0, 0, 108)
+removeAllButton.Text = "REMOVE ALL"
+removeAllButton.Font = Enum.Font.GothamBold
+removeAllButton.TextSize = 10
+removeAllButton.BackgroundColor3 = Color3.fromRGB(180, 60, 60)
+removeAllButton.TextColor3 = Color3.fromRGB(255, 255, 255)
+removeAllButton.Parent = wearPanel
+Instance.new("UICorner", removeAllButton).CornerRadius = UDim.new(0, 8)
+
+-- Preppy Wears Button
+local preppyButton = Instance.new("TextButton")
+preppyButton.Size = UDim2.new(0.31, 0, 0, 30)
+preppyButton.Position = UDim2.new(0.69, 0, 0, 108)
+preppyButton.Text = "PREPPY"
+preppyButton.Font = Enum.Font.GothamBold
+preppyButton.TextSize = 10
+preppyButton.BackgroundColor3 = Color3.fromRGB(255, 100, 180)
+preppyButton.TextColor3 = Color3.fromRGB(255, 255, 255)
+preppyButton.Parent = wearPanel
+Instance.new("UICorner", preppyButton).CornerRadius = UDim.new(0, 8)
+
+-- Stop Button
+local stopButton = Instance.new("TextButton")
+stopButton.Size = UDim2.new(1, 0, 0, 30)
+stopButton.Position = UDim2.new(0, 0, 0, 146)
+stopButton.Text = "⏹️ STOP"
+stopButton.Font = Enum.Font.GothamBold
+stopButton.TextSize = 11
+stopButton.BackgroundColor3 = Color3.fromRGB(180, 60, 60)
+stopButton.TextColor3 = Color3.fromRGB(255, 255, 255)
+stopButton.Parent = wearPanel
+Instance.new("UICorner", stopButton).CornerRadius = UDim.new(0, 8)
+
+-- Status Label
+local wearStatus = Instance.new("TextLabel")
+wearStatus.Size = UDim2.new(1, 0, 0, 50)
+wearStatus.Position = UDim2.new(0, 0, 0, 184)
+wearStatus.BackgroundTransparency = 1
+wearStatus.Text = ""
+wearStatus.Font = Enum.Font.Gotham
+wearStatus.TextSize = 8
+wearStatus.TextColor3 = Color3.fromRGB(100, 255, 100)
+wearStatus.TextXAlignment = Enum.TextXAlignment.Center
+wearStatus.TextWrapped = true
+wearStatus.Parent = wearPanel
+
+-- Progress Bar
+local progressFrame = Instance.new("Frame")
+progressFrame.Size = UDim2.new(1, 0, 0, 4)
+progressFrame.Position = UDim2.new(0, 0, 0, 242)
+progressFrame.BackgroundColor3 = Color3.fromRGB(40, 44, 66)
+progressFrame.BackgroundTransparency = 0.5
+progressFrame.Visible = false
+progressFrame.Parent = wearPanel
+Instance.new("UICorner", progressFrame).CornerRadius = UDim.new(0, 2)
+
+local progressBar = Instance.new("Frame")
+progressBar.Size = UDim2.new(0, 0, 1, 0)
+progressBar.BackgroundColor3 = Color3.fromRGB(0, 220, 255)
+progressBar.Parent = progressFrame
+Instance.new("UICorner", progressBar).CornerRadius = UDim.new(0, 2)
+
+local progressText = Instance.new("TextLabel")
+progressText.Size = UDim2.new(1, 0, 0, 12)
+progressText.Position = UDim2.new(0, 0, 0, 250)
+progressText.BackgroundTransparency = 1
+progressText.Text = ""
+progressText.Font = Enum.Font.Gotham
+progressText.TextSize = 7
+progressText.TextColor3 = Color3.fromRGB(160, 170, 200)
+progressText.TextXAlignment = Enum.TextXAlignment.Center
+progressText.Visible = false
+progressText.Parent = wearPanel
+
+-- Wear Panel Button Functions
+equipWearButton.MouseButton1Click:Connect(function()
+    local wearName = wearNameInput.Text
+    if wearName == "" then
+        wearStatus.Text = "❌ Enter a wear name!"
+        wearStatus.TextColor3 = Color3.fromRGB(255, 100, 100)
+        return
+    end
+    
+    local wearId = GetPetWearByName(wearName)
+    if not wearId then
+        wearStatus.Text = "❌ Wear not found: " .. wearName
+        wearStatus.TextColor3 = Color3.fromRGB(255, 100, 100)
+        return
+    end
+    
+    EquipWearOnPet(wearId)
+    wearStatus.Text = "✅ Equipped: " .. wearName
+    wearStatus.TextColor3 = Color3.fromRGB(100, 255, 100)
+end)
+
+removeWearButton.MouseButton1Click:Connect(function()
+    local wearName = wearNameInput.Text
+    if wearName == "" then
+        wearStatus.Text = "❌ Enter a wear name!"
+        wearStatus.TextColor3 = Color3.fromRGB(255, 100, 100)
+        return
+    end
+    
+    local wearId = GetPetWearByName(wearName)
+    if not wearId then
+        wearStatus.Text = "❌ Wear not found: " .. wearName
+        wearStatus.TextColor3 = Color3.fromRGB(255, 100, 100)
+        return
+    end
+    
+    RemoveWearFromPet(wearId)
+    wearStatus.Text = "🗑️ Removed: " .. wearName
+    wearStatus.TextColor3 = Color3.fromRGB(255, 200, 100)
+end)
+
+equipAllButton.MouseButton1Click:Connect(function()
+    stopEquipping = false
+    progressFrame.Visible = true
+    progressText.Visible = true
+    progressBar.Size = UDim2.new(0, 0, 1, 0)
+    
+    wearStatus.Text = "⏳ Equipping all wears..."
+    wearStatus.TextColor3 = Color3.fromRGB(255, 200, 100)
+    
+    local wears = GetAllPetWears()
+    local total = #wears
+    local equipped = 0
+    local failed = 0
+    
+    for i, wear in ipairs(wears) do
+        if stopEquipping then
+            wearStatus.Text = "⏹️ Stopped at " .. i .. "/" .. total
+            progressText.Text = "Stopped at " .. i .. "/" .. total
+            break
+        end
+        
+        local progress = i / total
+        progressBar.Size = UDim2.new(progress, 0, 1, 0)
+        progressText.Text = "Equipping: " .. wear.name .. " (" .. i .. "/" .. total .. ")"
+        
+        if EquipWearOnPet(wear.id) then
+            equipped = equipped + 1
+        else
+            failed = failed + 1
+        end
+        task.wait(0.05)
+    end
+    
+    if not stopEquipping then
+        wearStatus.Text = "✅ Equipped: " .. equipped .. ", ❌ Failed: " .. failed
+        wearStatus.TextColor3 = equipped > 0 and Color3.fromRGB(100, 255, 100) or Color3.fromRGB(255, 100, 100)
+        progressText.Text = "Complete! " .. equipped .. "/" .. total
+    end
+    
+    task.delay(3, function()
+        if not stopEquipping then
+            progressFrame.Visible = false
+            progressText.Visible = false
+        end
+    end)
+end)
+
+removeAllButton.MouseButton1Click:Connect(function()
+    stopEquipping = false
+    progressFrame.Visible = true
+    progressText.Visible = true
+    progressBar.Size = UDim2.new(0, 0, 1, 0)
+    
+    wearStatus.Text = "⏳ Removing all wears..."
+    wearStatus.TextColor3 = Color3.fromRGB(255, 200, 100)
+    
+    local wears = GetAllPetWears()
+    local total = #wears
+    local removed = 0
+    local failed = 0
+    
+    for i, wear in ipairs(wears) do
+        if stopEquipping then
+            wearStatus.Text = "⏹️ Stopped at " .. i .. "/" .. total
+            progressText.Text = "Stopped at " .. i .. "/" .. total
+            break
+        end
+        
+        local progress = i / total
+        progressBar.Size = UDim2.new(progress, 0, 1, 0)
+        progressText.Text = "Removing: " .. wear.name .. " (" .. i .. "/" .. total .. ")"
+        
+        if RemoveWearFromPet(wear.id) then
+            removed = removed + 1
+        else
+            failed = failed + 1
+        end
+        task.wait(0.03)
+    end
+    
+    if not stopEquipping then
+        wearStatus.Text = "🗑️ Removed: " .. removed .. ", ❌ Failed: " .. failed
+        wearStatus.TextColor3 = removed > 0 and Color3.fromRGB(255, 200, 100) or Color3.fromRGB(255, 100, 100)
+        progressText.Text = "Complete! " .. removed .. "/" .. total
+    end
+    
+    task.delay(3, function()
+        if not stopEquipping then
+            progressFrame.Visible = false
+            progressText.Visible = false
+        end
+    end)
+end)
+
+preppyButton.MouseButton1Click:Connect(function()
+    stopEquipping = false
+    progressFrame.Visible = true
+    progressText.Visible = true
+    progressBar.Size = UDim2.new(0, 0, 1, 0)
+    
+    wearStatus.Text = "⏳ Equipping preppy wears..."
+    wearStatus.TextColor3 = Color3.fromRGB(255, 200, 100)
+    
+    local wears = GetPreppyWears()
+    local total = #wears
+    local equipped = 0
+    local failed = 0
+    
+    for i, wear in ipairs(wears) do
+        if stopEquipping then
+            wearStatus.Text = "⏹️ Stopped at " .. i .. "/" .. total
+            progressText.Text = "Stopped at " .. i .. "/" .. total
+            break
+        end
+        
+        local progress = i / total
+        progressBar.Size = UDim2.new(progress, 0, 1, 0)
+        progressText.Text = "Equipping: " .. wear.name .. " (" .. i .. "/" .. total .. ")"
+        
+        if EquipWearOnPet(wear.id) then
+            equipped = equipped + 1
+        else
+            failed = failed + 1
+        end
+        task.wait(0.05)
+    end
+    
+    if not stopEquipping then
+        wearStatus.Text = "🎀 Preppy equipped: " .. equipped .. ", ❌ Failed: " .. failed
+        wearStatus.TextColor3 = equipped > 0 and Color3.fromRGB(100, 255, 100) or Color3.fromRGB(255, 100, 100)
+        progressText.Text = "Complete! " .. equipped .. "/" .. total
+    end
+    
+    task.delay(3, function()
+        if not stopEquipping then
+            progressFrame.Visible = false
+            progressText.Visible = false
+        end
+    end)
+end)
+
+stopButton.MouseButton1Click:Connect(function()
+    stopEquipping = true
+    wearStatus.Text = "⏹️ Stopping..."
+    wearStatus.TextColor3 = Color3.fromRGB(255, 200, 100)
+    
+    local originalColor = stopButton.BackgroundColor3
+    stopButton.BackgroundColor3 = Color3.fromRGB(255, 100, 100)
+    task.delay(0.3, function()
+        stopButton.BackgroundColor3 = originalColor
+    end)
+    
+    task.delay(1, function()
+        if stopEquipping then
+            progressFrame.Visible = false
+            progressText.Visible = false
+        end
+    end)
+end)
+
+-- ================================================================
+-- EGGS PANEL
+-- ================================================================
+
+local eggsPanel = Instance.new("Frame")
+eggsPanel.Size = UDim2.new(0.94, 0, 1, -52)
+eggsPanel.Position = UDim2.new(0.03, 0, 0, 52)
+eggsPanel.BackgroundTransparency = 1
+eggsPanel.Visible = false
+eggsPanel.Parent = mainFrame
+
+local eggsInfo = Instance.new("TextLabel")
+eggsInfo.Size = UDim2.new(1, 0, 0, 30)
+eggsInfo.Position = UDim2.new(0, 0, 0, 0)
+eggsInfo.BackgroundTransparency = 1
+eggsInfo.Text = "Spawn and hatch eggs"
+eggsInfo.Font = Enum.Font.Gotham
+eggsInfo.TextSize = 9
+eggsInfo.TextColor3 = Color3.fromRGB(160, 170, 200)
+eggsInfo.TextXAlignment = Enum.TextXAlignment.Center
+eggsInfo.Parent = eggsPanel
+
+-- Egg Name Input
+local eggNameInput = Instance.new("TextBox")
+eggNameInput.Size = UDim2.new(1, 0, 0, 28)
+eggNameInput.Position = UDim2.new(0, 0, 0, 35)
+eggNameInput.BackgroundColor3 = Color3.fromRGB(32, 36, 58)
+eggNameInput.TextColor3 = Color3.fromRGB(240, 240, 255)
+eggNameInput.TextSize = 11
+eggNameInput.Font = Enum.Font.Gotham
+eggNameInput.PlaceholderText = "Enter egg name (e.g., Royal Egg)"
+eggNameInput.PlaceholderColor3 = Color3.fromRGB(140, 150, 180)
+eggNameInput.ClearTextOnFocus = false
+eggNameInput.Text = ""
+eggNameInput.Parent = eggsPanel
+Instance.new("UICorner", eggNameInput).CornerRadius = UDim.new(0, 8)
+
+-- Spawn Egg Button
+local spawnEggButton = Instance.new("TextButton")
+spawnEggButton.Size = UDim2.new(0.48, 0, 0, 30)
+spawnEggButton.Position = UDim2.new(0, 0, 0, 70)
+spawnEggButton.Text = "SPAWN EGG"
+spawnEggButton.Font = Enum.Font.GothamBold
+spawnEggButton.TextSize = 11
+spawnEggButton.BackgroundColor3 = Color3.fromRGB(0, 140, 200)
+spawnEggButton.TextColor3 = Color3.fromRGB(255, 255, 255)
+spawnEggButton.Parent = eggsPanel
+Instance.new("UICorner", spawnEggButton).CornerRadius = UDim.new(0, 8)
+
+-- Hatch Egg Button
+local hatchEggButton = Instance.new("TextButton")
+hatchEggButton.Size = UDim2.new(0.48, 0, 0, 30)
+hatchEggButton.Position = UDim2.new(0.52, 0, 0, 70)
+hatchEggButton.Text = "HATCH EGG"
+hatchEggButton.Font = Enum.Font.GothamBold
+hatchEggButton.TextSize = 11
+hatchEggButton.BackgroundColor3 = Color3.fromRGB(200, 100, 0)
+hatchEggButton.TextColor3 = Color3.fromRGB(255, 255, 255)
+hatchEggButton.Parent = eggsPanel
+Instance.new("UICorner", hatchEggButton).CornerRadius = UDim.new(0, 8)
+
+-- Hatch Equipped Button
+local hatchEquippedButton = Instance.new("TextButton")
+hatchEquippedButton.Size = UDim2.new(1, 0, 0, 30)
+hatchEquippedButton.Position = UDim2.new(0, 0, 0, 108)
+hatchEquippedButton.Text = "HATCH EQUIPPED EGG"
+hatchEquippedButton.Font = Enum.Font.GothamBold
+hatchEquippedButton.TextSize = 11
+hatchEquippedButton.BackgroundColor3 = Color3.fromRGB(180, 80, 180)
+hatchEquippedButton.TextColor3 = Color3.fromRGB(255, 255, 255)
+hatchEquippedButton.Parent = eggsPanel
+Instance.new("UICorner", hatchEquippedButton).CornerRadius = UDim.new(0, 8)
+
+-- Override Pet Name Input
+local overrideInput = Instance.new("TextBox")
+overrideInput.Size = UDim2.new(1, 0, 0, 28)
+overrideInput.Position = UDim2.new(0, 0, 0, 146)
+overrideInput.BackgroundColor3 = Color3.fromRGB(32, 36, 58)
+overrideInput.TextColor3 = Color3.fromRGB(240, 240, 255)
+overrideInput.TextSize = 11
+overrideInput.Font = Enum.Font.Gotham
+overrideInput.PlaceholderText = "Override pet name (optional)"
+overrideInput.PlaceholderColor3 = Color3.fromRGB(140, 150, 180)
+overrideInput.ClearTextOnFocus = false
+overrideInput.Text = ""
+overrideInput.Parent = eggsPanel
+Instance.new("UICorner", overrideInput).CornerRadius = UDim.new(0, 8)
+
+-- Egg Status Label
+local eggStatus = Instance.new("TextLabel")
+eggStatus.Size = UDim2.new(1, 0, 0, 50)
+eggStatus.Position = UDim2.new(0, 0, 0, 182)
+eggStatus.BackgroundTransparency = 1
+eggStatus.Text = ""
+eggStatus.Font = Enum.Font.Gotham
+eggStatus.TextSize = 8
+eggStatus.TextColor3 = Color3.fromRGB(100, 255, 100)
+eggStatus.TextXAlignment = Enum.TextXAlignment.Center
+eggStatus.TextWrapped = true
+eggStatus.Parent = eggsPanel
+
+-- Eggs Panel Button Functions
+spawnEggButton.MouseButton1Click:Connect(function()
+    local eggName = eggNameInput.Text
+    if eggName == "" then
+        eggStatus.Text = "❌ Enter an egg name!"
+        eggStatus.TextColor3 = Color3.fromRGB(255, 100, 100)
+        return
+    end
+    
+    local result = SpawnEgg(eggName)
+    if result then
+        eggStatus.Text = "✅ Spawned: " .. eggName
+        eggStatus.TextColor3 = Color3.fromRGB(100, 255, 100)
+    else
+        eggStatus.Text = "❌ Egg not found: " .. eggName
+        eggStatus.TextColor3 = Color3.fromRGB(255, 100, 100)
+    end
+end)
+
+hatchEggButton.MouseButton1Click:Connect(function()
+    local eggName = eggNameInput.Text
+    if eggName == "" then
+        eggStatus.Text = "❌ Enter an egg name!"
+        eggStatus.TextColor3 = Color3.fromRGB(255, 100, 100)
+        return
+    end
+    
+    eggStatus.Text = "⏳ Hatching " .. eggName .. "..."
+    eggStatus.TextColor3 = Color3.fromRGB(255, 200, 100)
+    
+    local overrideName = overrideInput.Text
+    local success = HatchEgg(eggName, overrideName)
+    
+    if success then
+        eggStatus.Text = "🐣 Hatched: " .. eggName
+        eggStatus.TextColor3 = Color3.fromRGB(100, 255, 100)
+    else
+        eggStatus.Text = "❌ Failed to hatch: " .. eggName
+        eggStatus.TextColor3 = Color3.fromRGB(255, 100, 100)
+    end
+end)
+
+hatchEquippedButton.MouseButton1Click:Connect(function()
+    eggStatus.Text = "⏳ Hatching equipped egg..."
+    eggStatus.TextColor3 = Color3.fromRGB(255, 200, 100)
+    
+    local overrideName = overrideInput.Text
+    local success = HatchEquippedEgg(overrideName)
+    
+    if success then
+        eggStatus.Text = "🐣 Hatched equipped egg!"
+        eggStatus.TextColor3 = Color3.fromRGB(100, 255, 100)
+    else
+        eggStatus.Text = "❌ No egg equipped or hatch failed"
+        eggStatus.TextColor3 = Color3.fromRGB(255, 100, 100)
+    end
+end)
+
+-- Auto-capitalize for inputs
+wearNameInput:GetPropertyChangedSignal("Text"):Connect(function()
+    local cursor = wearNameInput.CursorPosition
+    local inputText = wearNameInput.Text
+    local newText = autoCapitalize(inputText)
+    if newText ~= inputText then
+        wearNameInput.Text = newText
+        wearNameInput.CursorPosition = math.max(1, math.min(cursor + (#newText - #inputText), #newText + 1))
+    end
+end)
+
+eggNameInput:GetPropertyChangedSignal("Text"):Connect(function()
+    local cursor = eggNameInput.CursorPosition
+    local inputText = eggNameInput.Text
+    local newText = autoCapitalize(inputText)
+    if newText ~= inputText then
+        eggNameInput.Text = newText
+        eggNameInput.CursorPosition = math.max(1, math.min(cursor + (#newText - #inputText), #newText + 1))
+    end
+end)
+
+overrideInput:GetPropertyChangedSignal("Text"):Connect(function()
+    local cursor = overrideInput.CursorPosition
+    local inputText = overrideInput.Text
+    local newText = autoCapitalize(inputText)
+    if newText ~= inputText then
+        overrideInput.Text = newText
+        overrideInput.CursorPosition = math.max(1, math.min(cursor + (#newText - #inputText), #newText + 1))
+    end
+end)
+
+-- ================================================================
+-- DRAGGING
+-- ================================================================
+
+local dragging = false
+local dragStart, startPos
+local uiLocked = false
+
+local lockButton = Instance.new("TextButton")
+lockButton.Size = UDim2.new(0, 20, 0, 20)
+lockButton.Position = UDim2.new(1, -25, 0, 5)
+lockButton.Text = "🔓"
+lockButton.Font = Enum.Font.GothamBold
+lockButton.TextSize = 10
+lockButton.BackgroundColor3 = Color3.fromRGB(50, 50, 70)
+lockButton.TextColor3 = Color3.fromRGB(255, 255, 255)
+lockButton.Parent = mainFrame
+Instance.new("UICorner", lockButton).CornerRadius = UDim.new(0, 4)
+
+lockButton.MouseButton1Click:Connect(function()
+    uiLocked = not uiLocked
+    if uiLocked then
+        lockButton.Text = "🔒"
+        lockButton.BackgroundColor3 = Color3.fromRGB(80, 80, 100)
+    else
+        lockButton.Text = "🔓"
+        lockButton.BackgroundColor3 = Color3.fromRGB(50, 50, 70)
+    end
+end)
+
+mainFrame.InputBegan:Connect(function(input)
+    if not uiLocked and (input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch) then
+        dragging = true
+        dragStart = input.Position
+        startPos = mainFrame.Position
+        
+        input.Changed:Connect(function()
+            if input.UserInputState == Enum.UserInputState.End then
+                dragging = false
+            end
+        end)
+    end
+end)
+
+mainFrame.InputChanged:Connect(function(input)
+    if not uiLocked and dragging and (input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch) then
+        local delta = input.Position - dragStart
+        mainFrame.Position = UDim2.new(
+            startPos.X.Scale,
+            startPos.X.Offset + delta.X,
+            startPos.Y.Scale,
+            startPos.Y.Offset + delta.Y
+        )
+    end
+end)
+
+print("✅ 4fire - Pet Wear + Egg Hatching loaded!")
