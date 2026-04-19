@@ -1,0 +1,649 @@
+-- blueprint.lua on discord - Pet Wear Only (with Stop & Preppy)
+
+local Players = game:GetService('Players')
+local ReplicatedStorage = game:GetService('ReplicatedStorage')
+local TweenService = game:GetService('TweenService')
+
+pcall(function()
+    setthreadidentity(2)
+end)
+
+local LocalPlayer = Players.LocalPlayer
+local playerGui = LocalPlayer:WaitForChild("PlayerGui")
+
+local Fsys = require(ReplicatedStorage:WaitForChild("Fsys"))
+local LoadModule = Fsys.load
+
+local ClientData = LoadModule("ClientData")
+local InventoryDB = LoadModule("InventoryDB")
+local DownloadClient = LoadModule("DownloadClient")
+
+_G.InventoryDB = InventoryDB
+
+-- ================================================================
+-- PET WEAR FUNCTIONS
+-- ================================================================
+
+local PetAccessoryEquipHelper = nil
+
+pcall(function()
+    PetAccessoryEquipHelper = LoadModule("PetAccessoryEquipHelper")
+end)
+
+-- Preppy Pet Wears list
+local PreppyWears = {
+    "Unicorn Horn",
+    "Pink Cat Ear Headphones",
+    "Rainbow Maker",
+    "2022 Birthday Cupcake Shoes",
+    "Heart Glasses",
+    "Flower Crown",
+    "Pink Bow",
+    "Candy Cane",
+    "Fairy Wings",
+    "Butterfly Wings",
+    "Angel Wings",
+    "Devil Wings",
+    "Dragon Wings",
+    "Star Pin",
+    "Moon Pin",
+    "Cloud Pin",
+    "Rainbow Pin",
+    "Heart Pin",
+    "Flower Pin",
+    "Butterfly Pin"
+}
+
+local isEquipping = false
+local stopEquipping = false
+local currentWearIndex = 0
+local equipThread = nil
+
+local function GetPetWearByName(name)
+    for id, v in pairs(InventoryDB.pet_accessories or {}) do
+        if v.name and v.name:lower() == name:lower() then
+            return id
+        end
+    end
+    return false
+end
+
+local function GetAllPetWears()
+    local wears = {}
+    for id, v in pairs(InventoryDB.pet_accessories or {}) do
+        if v.name and v.name ~= "" then
+            table.insert(wears, {id = id, name = v.name})
+        end
+    end
+    return wears
+end
+
+local function GetPreppyWears()
+    local wears = {}
+    for _, wearName in ipairs(PreppyWears) do
+        local id = GetPetWearByName(wearName)
+        if id then
+            table.insert(wears, {id = id, name = wearName})
+        end
+    end
+    return wears
+end
+
+local function EquipWearOnPet(wearId)
+    if not PetAccessoryEquipHelper then
+        warn("[PetWear] PetAccessoryEquipHelper not loaded")
+        return false
+    end
+    
+    local wearEntry = InventoryDB.pet_accessories and InventoryDB.pet_accessories[wearId]
+    if not wearEntry then
+        warn("[PetWear] No entry in InventoryDB.pet_accessories for: " .. tostring(wearId))
+        return false
+    end
+    
+    local wrappers = ClientData.get("pet_char_wrappers")
+    if not wrappers or #wrappers == 0 then
+        warn("[PetWear] No pet equipped")
+        return false
+    end
+    
+    local petModel = wrappers[#wrappers].char
+    if not petModel or not petModel:IsDescendantOf(workspace) then
+        warn("[PetWear] Could not find pet model in workspace")
+        return false
+    end
+    
+    task.spawn(function()
+        local ok, accessoryAsset = pcall(function()
+            return DownloadClient.promise_download_copy("PetAvatarResources", wearEntry.model_handle):expect()
+        end)
+        if not ok or not accessoryAsset then
+            warn("[PetWear] Failed to download asset for: " .. tostring(wearEntry.model_handle))
+            return
+        end
+        
+        local success, result = pcall(function()
+            return PetAccessoryEquipHelper.equip_accessory({
+                pet_model = petModel,
+                accessory_base_asset = accessoryAsset,
+                accessory_item_entry = wearEntry,
+                play_poof_effect = true,
+                is_mannequin = false,
+            })
+        end)
+        
+        if success and result then
+            print("[PetWear] Equipped: " .. (wearEntry.name or wearId))
+        else
+            warn("[PetWear] equip_accessory failed: " .. tostring(result))
+        end
+    end)
+    return true
+end
+
+local function EquipAllPetWears()
+    local wears = GetAllPetWears()
+    local equipped = 0
+    local failed = 0
+    
+    for i, wear in ipairs(wears) do
+        if stopEquipping then
+            print("[PetWear] Stopped at wear " .. i .. "/" .. #wears)
+            break
+        end
+        if EquipWearOnPet(wear.id) then
+            equipped = equipped + 1
+        else
+            failed = failed + 1
+        end
+        task.wait(0.05)
+    end
+    
+    return equipped, failed
+end
+
+local function EquipPreppyWears()
+    local wears = GetPreppyWears()
+    local equipped = 0
+    local failed = 0
+    
+    for i, wear in ipairs(wears) do
+        if stopEquipping then
+            print("[PetWear] Stopped preppy wears at " .. i .. "/" .. #wears)
+            break
+        end
+        if EquipWearOnPet(wear.id) then
+            equipped = equipped + 1
+        else
+            failed = failed + 1
+        end
+        task.wait(0.05)
+    end
+    
+    return equipped, failed
+end
+
+-- Global functions
+_G.get_pet_wears = GetAllPetWears
+_G.equip_wear_on_pet = EquipWearOnPet
+_G.equip_all_wears = function()
+    stopEquipping = false
+    return EquipAllPetWears()
+end
+_G.equip_preppy_wears = function()
+    stopEquipping = false
+    return EquipPreppyWears()
+end
+_G.stop_equipping = function()
+    stopEquipping = true
+    print("[PetWear] Stop command received")
+    return true
+end
+
+-- Auto-capitalize helper
+local function autoCapitalize(text)
+    if not text or text == "" then
+        return text
+    end
+
+    local result = ""
+    local capitalizeNext = true
+
+    for i = 1, #text do
+        local char = text:sub(i, i)
+        if char == " " then
+            capitalizeNext = true
+            result = result .. char
+        elseif capitalizeNext then
+            result = result .. char:upper()
+            capitalizeNext = false
+        else
+            result = result .. char:lower()
+        end
+    end
+
+    return result
+end
+
+-- ================================================================
+-- GUI - Pet Wear Only
+-- ================================================================
+
+local screenGui = Instance.new("ScreenGui")
+screenGui.Name = "4fire PetWear"
+screenGui.ResetOnSpawn = false
+screenGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+screenGui.IgnoreGuiInset = false
+screenGui.Parent = playerGui
+
+local mainFrame = Instance.new("Frame")
+mainFrame.Size = UDim2.new(0, 320, 0, 420)
+mainFrame.Position = UDim2.new(0.5, -160, 0.5, -210)
+mainFrame.BackgroundColor3 = Color3.fromRGB(22, 26, 40)
+mainFrame.BorderSizePixel = 0
+mainFrame.Active = true
+mainFrame.Parent = screenGui
+
+local uiScale = Instance.new("UIScale", mainFrame)
+uiScale.Scale = 0.7
+
+local mainCorner = Instance.new("UICorner")
+mainCorner.CornerRadius = UDim.new(0, 14)
+mainCorner.Parent = mainFrame
+
+local uiStroke = Instance.new("UIStroke")
+uiStroke.Thickness = 3
+uiStroke.Color = Color3.fromRGB(0, 220, 255)
+uiStroke.Parent = mainFrame
+
+local palette = {
+    Color3.fromRGB(0, 220, 255),
+    Color3.fromRGB(120, 90, 255),
+    Color3.fromRGB(255, 80, 160),
+    Color3.fromRGB(0, 200, 180)
+}
+local colorIdx = 1
+task.spawn(function()
+    while true do
+        colorIdx = colorIdx % #palette + 1
+        TweenService:Create(uiStroke, TweenInfo.new(4), { Color = palette[colorIdx] }):Play()
+        task.wait(4)
+    end
+end)
+
+local title = Instance.new("TextLabel")
+title.Size = UDim2.new(1, 0, 0, 20)
+title.Position = UDim2.new(0, 0, 0, 4)
+title.BackgroundTransparency = 1
+title.Text = "4fire - Pet Wear"
+title.Font = Enum.Font.GothamBold
+title.TextSize = 12
+title.TextColor3 = Color3.fromRGB(235, 240, 255)
+title.Parent = mainFrame
+
+-- Content Frame
+local contentFrame = Instance.new("Frame")
+contentFrame.Size = UDim2.new(0.94, 0, 1, -48)
+contentFrame.Position = UDim2.new(0.03, 0, 0, 46)
+contentFrame.BackgroundTransparency = 1
+contentFrame.Parent = mainFrame
+
+-- Info Label
+local infoLabel = Instance.new("TextLabel")
+infoLabel.Size = UDim2.new(1, 0, 0, 30)
+infoLabel.Position = UDim2.new(0, 0, 0, 0)
+infoLabel.BackgroundTransparency = 1
+infoLabel.Text = "Equip accessories on your pet"
+infoLabel.Font = Enum.Font.Gotham
+infoLabel.TextSize = 9
+infoLabel.TextColor3 = Color3.fromRGB(160, 170, 200)
+infoLabel.TextXAlignment = Enum.TextXAlignment.Center
+infoLabel.Parent = contentFrame
+
+-- Wear Name Input
+local wearNameInput = Instance.new("TextBox")
+wearNameInput.Size = UDim2.new(1, 0, 0, 28)
+wearNameInput.Position = UDim2.new(0, 0, 0, 35)
+wearNameInput.BackgroundColor3 = Color3.fromRGB(32, 36, 58)
+wearNameInput.TextColor3 = Color3.fromRGB(240, 240, 255)
+wearNameInput.TextSize = 11
+wearNameInput.Font = Enum.Font.Gotham
+wearNameInput.PlaceholderText = "Enter pet wear name..."
+wearNameInput.PlaceholderColor3 = Color3.fromRGB(140, 150, 180)
+wearNameInput.ClearTextOnFocus = false
+wearNameInput.Text = ""
+wearNameInput.Parent = contentFrame
+Instance.new("UICorner", wearNameInput).CornerRadius = UDim.new(0, 8)
+
+-- Equip Single Wear Button
+local equipWearButton = Instance.new("TextButton")
+equipWearButton.Size = UDim2.new(1, 0, 0, 30)
+equipWearButton.Position = UDim2.new(0, 0, 0, 70)
+equipWearButton.Text = "EQUIP WEAR"
+equipWearButton.Font = Enum.Font.GothamBold
+equipWearButton.TextSize = 11
+equipWearButton.BackgroundColor3 = Color3.fromRGB(0, 140, 200)
+equipWearButton.TextColor3 = Color3.fromRGB(255, 255, 255)
+equipWearButton.Parent = contentFrame
+Instance.new("UICorner", equipWearButton).CornerRadius = UDim.new(0, 8)
+
+-- Equip All Wears Button
+local equipAllWearsButton = Instance.new("TextButton")
+equipAllWearsButton.Size = UDim2.new(0.48, 0, 0, 30)
+equipAllWearsButton.Position = UDim2.new(0, 0, 0, 108)
+equipAllWearsButton.Text = "EQUIP ALL"
+equipAllWearsButton.Font = Enum.Font.GothamBold
+equipAllWearsButton.TextSize = 11
+equipAllWearsButton.BackgroundColor3 = Color3.fromRGB(180, 120, 50)
+equipAllWearsButton.TextColor3 = Color3.fromRGB(255, 255, 255)
+equipAllWearsButton.Parent = contentFrame
+Instance.new("UICorner", equipAllWearsButton).CornerRadius = UDim.new(0, 8)
+
+-- Equip Preppy Wears Button
+local equipPreppyButton = Instance.new("TextButton")
+equipPreppyButton.Size = UDim2.new(0.48, 0, 0, 30)
+equipPreppyButton.Position = UDim2.new(0.52, 0, 0, 108)
+equipPreppyButton.Text = "PREPPY WEARS"
+equipPreppyButton.Font = Enum.Font.GothamBold
+equipPreppyButton.TextSize = 10
+equipPreppyButton.BackgroundColor3 = Color3.fromRGB(255, 100, 180)
+equipPreppyButton.TextColor3 = Color3.fromRGB(255, 255, 255)
+equipPreppyButton.Parent = contentFrame
+Instance.new("UICorner", equipPreppyButton).CornerRadius = UDim.new(0, 8)
+
+-- Stop Equipping Button
+local stopButton = Instance.new("TextButton")
+stopButton.Size = UDim2.new(1, 0, 0, 30)
+stopButton.Position = UDim2.new(0, 0, 0, 146)
+stopButton.Text = "⏹️ STOP EQUIPPING"
+stopButton.Font = Enum.Font.GothamBold
+stopButton.TextSize = 11
+stopButton.BackgroundColor3 = Color3.fromRGB(180, 60, 60)
+stopButton.TextColor3 = Color3.fromRGB(255, 255, 255)
+stopButton.Parent = contentFrame
+Instance.new("UICorner", stopButton).CornerRadius = UDim.new(0, 8)
+
+-- Status Label
+local statusLabel = Instance.new("TextLabel")
+statusLabel.Size = UDim2.new(1, 0, 0, 50)
+statusLabel.Position = UDim2.new(0, 0, 0, 184)
+statusLabel.BackgroundTransparency = 1
+statusLabel.Text = ""
+statusLabel.Font = Enum.Font.Gotham
+statusLabel.TextSize = 8
+statusLabel.TextColor3 = Color3.fromRGB(100, 255, 100)
+statusLabel.TextXAlignment = Enum.TextXAlignment.Center
+statusLabel.TextWrapped = true
+statusLabel.Parent = contentFrame
+
+-- Info Box
+local infoBox = Instance.new("Frame")
+infoBox.Size = UDim2.new(1, 0, 0, 80)
+infoBox.Position = UDim2.new(0, 0, 1, -90)
+infoBox.BackgroundColor3 = Color3.fromRGB(32, 36, 58)
+infoBox.BackgroundTransparency = 0.3
+infoBox.Parent = contentFrame
+Instance.new("UICorner", infoBox).CornerRadius = UDim.new(0, 8)
+
+local infoText = Instance.new("TextLabel")
+infoText.Size = UDim2.new(1, -10, 1, -10)
+infoText.Position = UDim2.new(0, 5, 0, 5)
+infoText.BackgroundTransparency = 1
+infoText.Text = "💡 Tip: Equip a pet first! Use 'PREPPY WEARS' for cute accessories or 'EQUIP ALL' for everything. Press 'STOP' to cancel ongoing equip."
+infoText.Font = Enum.Font.Gotham
+infoText.TextSize = 8
+infoText.TextColor3 = Color3.fromRGB(160, 170, 200)
+infoText.TextWrapped = true
+infoText.Parent = infoBox
+
+-- Progress Bar Frame
+local progressFrame = Instance.new("Frame")
+progressFrame.Size = UDim2.new(1, 0, 0, 4)
+progressFrame.Position = UDim2.new(0, 0, 0, 240)
+progressFrame.BackgroundColor3 = Color3.fromRGB(40, 44, 66)
+progressFrame.BackgroundTransparency = 0.5
+progressFrame.Visible = false
+progressFrame.Parent = contentFrame
+Instance.new("UICorner", progressFrame).CornerRadius = UDim.new(0, 2)
+
+local progressBar = Instance.new("Frame")
+progressBar.Size = UDim2.new(0, 0, 1, 0)
+progressBar.BackgroundColor3 = Color3.fromRGB(0, 220, 255)
+progressBar.Parent = progressFrame
+Instance.new("UICorner", progressBar).CornerRadius = UDim.new(0, 2)
+
+-- Progress Text
+local progressText = Instance.new("TextLabel")
+progressText.Size = UDim2.new(1, 0, 0, 12)
+progressText.Position = UDim2.new(0, 0, 0, 248)
+progressText.BackgroundTransparency = 1
+progressText.Text = ""
+progressText.Font = Enum.Font.Gotham
+progressText.TextSize = 7
+progressText.TextColor3 = Color3.fromRGB(160, 170, 200)
+progressText.TextXAlignment = Enum.TextXAlignment.Center
+progressText.Visible = false
+progressText.Parent = contentFrame
+
+-- ================================================================
+-- BUTTON FUNCTIONS
+-- ================================================================
+
+-- Equip Single Wear
+equipWearButton.MouseButton1Click:Connect(function()
+    local wearName = wearNameInput.Text
+    if wearName == "" then
+        statusLabel.Text = "❌ Enter a wear name!"
+        statusLabel.TextColor3 = Color3.fromRGB(255, 100, 100)
+        return
+    end
+    
+    local wearId = GetPetWearByName(wearName)
+    if not wearId then
+        statusLabel.Text = "❌ Wear not found: " .. wearName
+        statusLabel.TextColor3 = Color3.fromRGB(255, 100, 100)
+        return
+    end
+    
+    EquipWearOnPet(wearId)
+    statusLabel.Text = "✅ Equipped: " .. wearName
+    statusLabel.TextColor3 = Color3.fromRGB(100, 255, 100)
+end)
+
+-- Equip All Wears (with progress)
+equipAllWearsButton.MouseButton1Click:Connect(function()
+    stopEquipping = false
+    
+    -- Show progress UI
+    progressFrame.Visible = true
+    progressText.Visible = true
+    progressBar.Size = UDim2.new(0, 0, 1, 0)
+    
+    statusLabel.Text = "⏳ Equipping all wears..."
+    statusLabel.TextColor3 = Color3.fromRGB(255, 200, 100)
+    
+    local wears = GetAllPetWears()
+    local total = #wears
+    local equipped = 0
+    local failed = 0
+    
+    for i, wear in ipairs(wears) do
+        if stopEquipping then
+            statusLabel.Text = "⏹️ Stopped at " .. i .. "/" .. total .. " wears"
+            statusLabel.TextColor3 = Color3.fromRGB(255, 200, 100)
+            progressText.Text = "Stopped at " .. i .. "/" .. total
+            break
+        end
+        
+        -- Update progress
+        local progress = i / total
+        progressBar.Size = UDim2.new(progress, 0, 1, 0)
+        progressText.Text = "Equipping: " .. wear.name .. " (" .. i .. "/" .. total .. ")"
+        
+        if EquipWearOnPet(wear.id) then
+            equipped = equipped + 1
+        else
+            failed = failed + 1
+        end
+        task.wait(0.05)
+    end
+    
+    if not stopEquipping then
+        statusLabel.Text = "✅ Equipped: " .. equipped .. ", ❌ Failed: " .. failed
+        statusLabel.TextColor3 = equipped > 0 and Color3.fromRGB(100, 255, 100) or Color3.fromRGB(255, 100, 100)
+        progressText.Text = "Complete! " .. equipped .. "/" .. total
+    end
+    
+    -- Hide progress after 3 seconds
+    task.delay(3, function()
+        if not stopEquipping then
+            progressFrame.Visible = false
+            progressText.Visible = false
+        end
+    end)
+end)
+
+-- Equip Preppy Wears (with progress)
+equipPreppyButton.MouseButton1Click:Connect(function()
+    stopEquipping = false
+    
+    -- Show progress UI
+    progressFrame.Visible = true
+    progressText.Visible = true
+    progressBar.Size = UDim2.new(0, 0, 1, 0)
+    
+    statusLabel.Text = "⏳ Equipping preppy wears..."
+    statusLabel.TextColor3 = Color3.fromRGB(255, 200, 100)
+    
+    local wears = GetPreppyWears()
+    local total = #wears
+    local equipped = 0
+    local failed = 0
+    
+    for i, wear in ipairs(wears) do
+        if stopEquipping then
+            statusLabel.Text = "⏹️ Stopped at " .. i .. "/" .. total .. " preppy wears"
+            statusLabel.TextColor3 = Color3.fromRGB(255, 200, 100)
+            progressText.Text = "Stopped at " .. i .. "/" .. total
+            break
+        end
+        
+        -- Update progress
+        local progress = i / total
+        progressBar.Size = UDim2.new(progress, 0, 1, 0)
+        progressText.Text = "Equipping: " .. wear.name .. " (" .. i .. "/" .. total .. ")"
+        
+        if EquipWearOnPet(wear.id) then
+            equipped = equipped + 1
+        else
+            failed = failed + 1
+        end
+        task.wait(0.05)
+    end
+    
+    if not stopEquipping then
+        statusLabel.Text = "✅ Preppy equipped: " .. equipped .. ", ❌ Failed: " .. failed
+        statusLabel.TextColor3 = equipped > 0 and Color3.fromRGB(100, 255, 100) or Color3.fromRGB(255, 100, 100)
+        progressText.Text = "Complete! " .. equipped .. "/" .. total
+    end
+    
+    -- Hide progress after 3 seconds
+    task.delay(3, function()
+        if not stopEquipping then
+            progressFrame.Visible = false
+            progressText.Visible = false
+        end
+    end)
+end)
+
+-- Stop Equipping Button
+stopButton.MouseButton1Click:Connect(function()
+    stopEquipping = true
+    statusLabel.Text = "⏹️ Stopping equip process..."
+    statusLabel.TextColor3 = Color3.fromRGB(255, 200, 100)
+    
+    -- Flash the button
+    local originalColor = stopButton.BackgroundColor3
+    stopButton.BackgroundColor3 = Color3.fromRGB(255, 100, 100)
+    task.delay(0.3, function()
+        stopButton.BackgroundColor3 = originalColor
+    end)
+    
+    -- Hide progress after stop
+    task.delay(1, function()
+        if stopEquipping then
+            progressFrame.Visible = false
+            progressText.Visible = false
+        end
+    end)
+end)
+
+-- Auto-capitalize for input
+wearNameInput:GetPropertyChangedSignal("Text"):Connect(function()
+    local cursor = wearNameInput.CursorPosition
+    local inputText = wearNameInput.Text
+    local newText = autoCapitalize(inputText)
+    if newText ~= inputText then
+        wearNameInput.Text = newText
+        wearNameInput.CursorPosition = math.max(1, math.min(cursor + (#newText - #inputText), #newText + 1))
+    end
+end)
+
+-- ================================================================
+-- DRAGGING
+-- ================================================================
+
+local dragging = false
+local dragStart, startPos
+local uiLocked = false
+
+-- Lock button in top right
+local lockButton = Instance.new("TextButton")
+lockButton.Size = UDim2.new(0, 20, 0, 20)
+lockButton.Position = UDim2.new(1, -25, 0, 5)
+lockButton.Text = "🔓"
+lockButton.Font = Enum.Font.GothamBold
+lockButton.TextSize = 10
+lockButton.BackgroundColor3 = Color3.fromRGB(50, 50, 70)
+lockButton.TextColor3 = Color3.fromRGB(255, 255, 255)
+lockButton.Parent = mainFrame
+Instance.new("UICorner", lockButton).CornerRadius = UDim.new(0, 4)
+
+lockButton.MouseButton1Click:Connect(function()
+    uiLocked = not uiLocked
+    if uiLocked then
+        lockButton.Text = "🔒"
+        lockButton.BackgroundColor3 = Color3.fromRGB(80, 80, 100)
+    else
+        lockButton.Text = "🔓"
+        lockButton.BackgroundColor3 = Color3.fromRGB(50, 50, 70)
+    end
+end)
+
+mainFrame.InputBegan:Connect(function(input)
+    if not uiLocked and (input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch) then
+        dragging = true
+        dragStart = input.Position
+        startPos = mainFrame.Position
+        
+        input.Changed:Connect(function()
+            if input.UserInputState == Enum.UserInputState.End then
+                dragging = false
+            end
+        end)
+    end
+end)
+
+mainFrame.InputChanged:Connect(function(input)
+    if not uiLocked and dragging and (input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch) then
+        local delta = input.Position - dragStart
+        mainFrame.Position = UDim2.new(
+            startPos.X.Scale,
+            startPos.X.Offset + delta.X,
+            startPos.Y.Scale,
+            startPos.Y.Offset + delta.Y
+        )
+    end
+end)
+
+print("✅ 4fire Pet Wear loaded! (With Stop & Preppy Wears)")
